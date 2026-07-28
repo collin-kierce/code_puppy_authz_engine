@@ -8,7 +8,9 @@ calls, no caching, no yolo-mode checks. Covers:
 """
 
 import re
+import psutil
 from dataclasses import dataclass
+
 
 @dataclass
 class TerminationCommandMatch:
@@ -41,6 +43,31 @@ def normalize_command(command: str) -> str:
     command = _QUOTED_WORD_RE.sub(r"\2", command)           # unquote words
     command = _SEPARATOR_RE.sub(" ", command)               # normalize all separators + whitespace
     return command
+
+
+def get_processes() -> set[str | int]:
+    """Return current and parent process names/PIDs in one flat set.
+
+    Example shape:
+        {"python3", 12345, "zsh", 23456, "launchd", 1}
+
+    Note: sets are unordered, so this does not preserve name/PID pairing.
+    """
+    processes: set[str | int] = set()
+    process = psutil.Process()
+
+    while process is not None:
+        try:
+            processes.add(process.name())
+            processes.add(str(process.pid))
+            process = process.parent()
+        except psutil.NoSuchProcess:
+            break
+        except (psutil.AccessDenied, psutil.ZombieProcess):
+            processes.add(str(process.pid))
+            break
+
+    return processes
 
 
 def get_quoted_regions(text: str) -> list[tuple[int, int]]:
@@ -94,12 +121,10 @@ def check_window(tokens: list, candidate_commands: set, candidate_names: set, wi
 
 COMMANDS = {"kill", "pkill", "killall", "taskkill", "stop-process", "spps"}
 
-_MACOS_LINUX_PROTECTED_NAMES = {"python", "python3", "code-puppy", "code-puppy-venv", "login", "terminal", "zsh", "-zsh", "bash"}
-_WINDOWS_PROTECTED_NAMES = {"windowsterminal", "conhost", "openconsole", "cmd", "powershell", "pwsh", "explorer"}
-PROTECTED_NAMES = _MACOS_LINUX_PROTECTED_NAMES | _WINDOWS_PROTECTED_NAMES
-
+PROTECTED_NAMES = get_processes()
 
 def detect_self_termination_command(command: str) ->  TerminationCommandMatch | None:
+
     #Normalize command to remove obfuscations and standardize separators
     command = normalize_command(command)
 

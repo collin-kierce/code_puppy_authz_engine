@@ -8,8 +8,6 @@ Any command detected will be blocked immediatly
 
 from code_puppy.callbacks import register_callback
 
-from code_puppy.messaging import emit_info, emit_warning #cleanup
-
 from code_puppy.plugins.self_termination_guardrail.detector import (
     detect_self_termination_command,
 )
