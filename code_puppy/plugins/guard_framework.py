@@ -75,7 +75,7 @@ def _block_command(spec: GuardSpec, command: str, match: Any) -> Dict[str, Any]:
         Dict with blocked=True and a descriptive error.
     """
     error_message = (
-        f"🛑 Destructive command blocked! Detected {match.pattern_name} "
+        f"🛑 Command blocked! Detected {match.pattern_name} "
         f"in command:\n  {command}\n"
         f"  {match.description}\n\n"
         f"  {spec.consequence}\n"

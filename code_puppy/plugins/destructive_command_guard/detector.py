@@ -5,7 +5,7 @@ calls, no caching, no yolo-mode checks. Covers:
 - Unix/Linux: rm -rf root/home, SQL DROP via clients, docker prune, accidental package publishes
 - Windows PowerShell: Remove-Item, rmdir, del, Format-Volume, Clear-Disk, registry operations
 - Windows CMD: rd, rmdir, del, erase with /s /q flags, format, diskpart
-The patterns are defined in patterns directory as JSON files and loaded at load time
+The patterns are defined in patterns directory as JSON files and loaded at first call
 """
 
 import re
