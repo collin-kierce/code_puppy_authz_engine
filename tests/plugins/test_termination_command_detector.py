@@ -4,24 +4,60 @@ from __future__ import annotations
 
 import pytest
 
-from code_puppy.plugins.self_termination_guardrail.detector import (
-    TerminationCommandMatch,
-    detect_self_termination_command,
-)
+from code_puppy.plugins.self_termination_guardrail import detector
+from code_puppy.plugins.self_termination_guardrail.detector import TerminationCommandMatch
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def stable_protected_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make detector tests deterministic.
+
+    The detector computes PROTECTED_NAMES at import time from the current
+    process tree. Patch that already-computed set instead of get_processes(),
+    because patching get_processes() after import would be too late.
+    """
+    monkeypatch.setattr(
+        detector,
+        "PROTECTED_NAMES",
+        {
+            "12345",
+            "4242",
+            "98765",
+            "bash",
+            "cmd",
+            "code-puppy",
+            "code_puppy",
+            "code-puppy-venv",
+            "conhost",
+            "login",
+            "openconsole",
+            "python",
+            "python3",
+            "terminal",
+            "windowsterminal",
+            "zsh",
+            "-zsh",
+        },
+    )
+
+
 def _hits(cmd: str) -> TerminationCommandMatch | None:
-    """Wrap with a shell operator so _is_real_command passes."""
-    return detect_self_termination_command(f"&& {cmd}")
+    """Return a match when the command is flagged."""
+    return detector.detect_self_termination_command(f"&& {cmd}")
 
 
 def _miss(cmd: str) -> bool:
     """Return True when the command is NOT flagged."""
-    return detect_self_termination_command(f"&& {cmd}") is None
+    return detector.detect_self_termination_command(f"&& {cmd}") is None
+
+
+def _raw_hits(cmd: str) -> TerminationCommandMatch | None:
+    """Return a match for an unwrapped command string."""
+    return detector.detect_self_termination_command(cmd)
 
 
 # ===========================================================================
@@ -37,10 +73,13 @@ class TestPkillCommand:
         [
             "pkill python3",
             "pkill code-puppy",
+            "pkill code_puppy",
             "pkill code-puppy-venv",
             "pkill -9 login",
             "pkill -n Terminal",
-            "pkill -U uid -- -zsh"
+            "pkill -U uid -- -zsh",
+            "pkill -f code-puppy",
+            "pkill -9 -f code_puppy",
         ],
     )
     def test_matches(self, cmd: str) -> None:
@@ -57,12 +96,90 @@ class TestKillallCommand:
             "killall python",
             "killall -9 bash",
             "killall zsh",
-            "killall -x python3"
+            "killall -x python3",
         ],
     )
     def test_matches(self, cmd: str) -> None:
         result = _hits(cmd)
         assert result is not None
+
+
+class TestKillCommand:
+    """kill -flag protected_pid"""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "kill 12345",
+            "kill -9 4242",
+            "kill -TERM 98765",
+        ],
+    )
+    def test_matches_pid(self, cmd: str) -> None:
+        result = _hits(cmd)
+        assert result is not None
+
+
+# ===========================================================================
+# Detector behavior
+# ===========================================================================
+
+
+class TestObfuscatedCommands:
+    """Simple shell obfuscations are normalized before matching."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "p''kill python3",
+            "task^kill /PID 12345",
+        ],
+    )
+    def test_matches_obfuscated_command(self, cmd: str) -> None:
+        result = _hits(cmd)
+        assert result is not None
+
+
+class TestDetectionWindow:
+    """Protected tokens must appear close enough after the command token."""
+
+    def test_matches_name_at_window_boundary(self) -> None:
+        result = _hits("pkill -9 -f --signal TERM python3")
+        assert result is not None
+
+    def test_misses_name_outside_window(self) -> None:
+        assert _miss("pkill a b c d e f python3")
+
+
+class TestCompoundCommands:
+    """Compound command strings are scanned subcommand-by-subcommand."""
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "echo hello && pkill python3",
+            "echo hello || kill -9 12345",
+            "echo hello & killall bash",
+            "echo hello && taskkill /PID 12345",
+            "echo hello && Stop-Process -Name python3",
+            "echo hello && pkill python3 && echo goodbye",
+            "pkill code-puppy && echo should_not_matter",
+        ],
+    )
+    def test_matches_dangerous_subcommand(self, cmd: str) -> None:
+        result = _raw_hits(cmd)
+        assert result is not None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "echo hello && echo goodbye",
+            "echo hello && pkill notepad",
+            "echo hello && taskkill /PID 11111",
+        ],
+    )
+    def test_misses_safe_compound_command(self, cmd: str) -> None:
+        assert _raw_hits(cmd) is None
 
 
 # ===========================================================================
@@ -77,8 +194,11 @@ class TestTaskkillCommand:
         "cmd",
         [
             "taskkill /IM python.exe",
+            "taskkill /IM PYTHON.EXE",
             "taskkill /IM cmd.exe",
-            "taskkill /F /IM WindowsTerminal.exe"
+            "taskkill /F /IM WindowsTerminal.exe",
+            "taskkill /PID 12345",
+            "taskkill /F /PID 4242",
         ],
     )
     def test_matches(self, cmd: str) -> None:
@@ -93,8 +213,11 @@ class TestStopProcessCommand:
         "cmd",
         [
             "Stop-Process -Name 'OpenConsole.exe'",
-            "Stop-Process -Name 'conhost.exe' -Force"
+            "Stop-Process -Name 'conhost.exe' -Force",
+            "STOP-PROCESS -Name PYTHON3",
+            "Stop-Process -Id 98765",
             "spps -Name 'python3.exe'",
+            "spps -Id 4242",
         ],
     )
     def test_matches(self, cmd: str) -> None:
@@ -113,9 +236,15 @@ class TestFalsePositives:
     @pytest.mark.parametrize(
         "cmd",
         [
-            "pkill notepad"
-            "killall -9 'Google Chrome'"
-            "echo 'Stop-Process -Name python'"
+            "pkill notepad",
+            "kill -9 11111",
+            "killall -9 'Google Chrome'",
+            "taskkill /PID 11111",
+            "echo 'pkill python3'",
+            "printf 'taskkill /PID 12345'",
+            "echo 'Stop-Process -Name python'",
+            "python3",
+            "pkill",
         ],
     )
     def test_safe_commands(self, cmd: str) -> None:
