@@ -35,6 +35,13 @@ _BACKSLASH_ESCAPE_RE = re.compile(r"\\(.)")
 _QUOTED_WORD_RE      = re.compile(r'(["\'])(\w+)\1')
 _CARET_ESCAPE_RE     = re.compile(r"\^(.?)")
 _SEPARATOR_RE        = re.compile(r"[,;\s]+")
+_TOKEN_RE            = re.compile(r"\b\w+(?:-\w+)*\b")
+
+STATIC_PROTECTED_NAMES = {
+    "code-puppy",
+    "code_puppy",
+    "code-puppy-venv",
+}
 
 def normalize_command(command: str) -> str:
     command = _EMPTY_QUOTES_RE.sub("", command)             # strip '' and ""
@@ -45,20 +52,25 @@ def normalize_command(command: str) -> str:
     return command
 
 
-def get_processes() -> set[str | int]:
-    """Return current and parent process names/PIDs in one flat set.
+def _process_name_words(name: str) -> set[str]:
+    """Return lowercase words from a process name."""
+    return {match.group() for match in _TOKEN_RE.finditer(name.lower())}
+
+
+def get_processes() -> set[str]:
+    """Return current and parent process names/PIDs plus static aliases.
 
     Example shape:
-        {"python3", 12345, "zsh", 23456, "launchd", 1}
+        {"python3", "12345", "zsh", "23456", "launchd", "1"}
 
     Note: sets are unordered, so this does not preserve name/PID pairing.
     """
-    processes: set[str | int] = set()
+    processes: set[str] = set(STATIC_PROTECTED_NAMES)
     process = psutil.Process()
 
     while process is not None:
         try:
-            processes.add(process.name())
+            processes.update(_process_name_words(process.name()))
             processes.add(str(process.pid))
             process = process.parent()
         except psutil.NoSuchProcess:
@@ -132,7 +144,7 @@ def detect_self_termination_command(command: str) ->  TerminationCommandMatch | 
     subcommands = split_command(command)
 
     for subcommand in subcommands:
-        token_matches = list(re.finditer(r'\b\w+(?:-\w+)*\b', subcommand.lower()))
+        token_matches = list(_TOKEN_RE.finditer(subcommand.lower()))
         tokens = [m.group() for m in token_matches]
         token_set = set(tokens)
 
