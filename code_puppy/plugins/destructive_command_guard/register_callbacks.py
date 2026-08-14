@@ -59,6 +59,9 @@ async def destructive_command_guard_callback(
     if match is None:
         return None
 
+    if match.block_immediately:
+        return _block_command(match.pattern_name, match)
+
     # --- Interactive TTY: ask the user ---
     if _is_interactive():
         return await _prompt_user_approval(command, match)
